@@ -159,7 +159,7 @@ void test(){
     int *partition_gpu;
     HRR(cudaMalloc((void **)&partition_gpu,sizeof(int)*1024*HASH_MAX));
 
-    for(int test_size = STEP * 4; test_size < MAX_COUNT;test_size += STEP){
+    for(int test_size = 0; test_size < MAX_COUNT;test_size += STEP){
         double time_start = clock();
         test_linear<<<1, 32>>>(a_device, test_size, b_device, test_size,ans_pos,partition_gpu);
         HRR(cudaDeviceSynchronize());
