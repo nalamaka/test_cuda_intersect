@@ -2,6 +2,7 @@
 #include"set_intersect.cuh"
 #include"error.cuh"
 #include"time.h"
+#include"linear_search.cuh"
 
 #define MAX_COUNT 100000
 #define STEP 1000
@@ -30,7 +31,7 @@ void gen_gold_once(int *a,int size_a,int *b,int size_b,int *ans,int pos){
 }
 
 void generate_gold_ans(int *a,int size_a,int *b,int size_b,int gold_step,int *gold_container){
-    int end = size_a / gold_step;
+    // int end = size_a / gold_step;
     for(int curr_pos = 0;curr_pos < size_a;curr_pos += gold_step){
         gen_gold_once(a,curr_pos,b,curr_pos,gold_container,curr_pos/gold_step);
     }
@@ -49,18 +50,57 @@ void write_results_to_file(int *results, int size, const char *filename){
 }
 
 __global__ void test_bs(int *a,int size_a,int *b,int size_b,int *ans_pos){
-    printf("a1:%d,b1:%d\n",a[1],b[1]);
-    printf("a10:%d,b10:%d\n",a[10],b[10]);
-    printf("sizea:%d,sizeb:%d\n",size_a,size_b);
+    // printf("a1:%d,b1:%d\n",a[1],b[1]);
+    // printf("a10:%d,b10:%d\n",a[10],b[10]);
+    // printf("sizea:%d,sizeb:%d\n",size_a,size_b);
     __shared__ int G_counter;
     if (threadIdx.x == 0)
 	{
 		ans_pos[0] = 0;
         G_counter = 0;
 	}
-    __syncwarp();
     int P_counter = intersect_bs_cache(a,size_a,b,size_b);
-    printf("Pcounter:%d\n",P_counter);
+    // printf("Pcounter:%d\n",P_counter);
+    atomicMax(&G_counter,P_counter);
+    __syncwarp();
+    if (threadIdx.x == 0)
+	{
+		atomicAdd(&ans_pos[0], G_counter);
+	}
+}
+
+__global__ void test_merge(int *a,int size_a,int *b,int size_b,int *ans_pos){
+    // printf("a1:%d,b1:%d\n",a[1],b[1]);
+    // printf("a10:%d,b10:%d\n",a[10],b[10]);
+    // printf("sizea:%d,sizeb:%d\n",size_a,size_b);
+    __shared__ int G_counter;
+    if (threadIdx.x == 0)
+	{
+		ans_pos[0] = 0;
+        G_counter = 0;
+	}
+    int P_counter = intersect_num_merge(a,size_a,b,size_b);
+    // printf("Pcounter:%d\n",P_counter);
+    atomicAdd(&G_counter,P_counter);
+    __syncwarp();
+    if (threadIdx.x == 0)
+	{
+		atomicAdd(&ans_pos[0], G_counter);
+	}
+}
+
+__global__ void test_linear(int *a,int size_a,int *b,int size_b,int *ans_pos,int *partition){
+    // printf("a1:%d,b1:%d\n",a[1],b[1]);
+    // printf("a10:%d,b10:%d\n",a[10],b[10]);
+    // printf("sizea:%d,sizeb:%d\n",size_a,size_b);
+    __shared__ int G_counter;
+    if (threadIdx.x == 0)
+	{
+		ans_pos[0] = 0;
+        G_counter = 0;
+	}
+    int P_counter = intersect_hash(a,size_a,b,size_b,partition);
+    // printf("Pcounter:%d\n",P_counter);
     atomicAdd(&G_counter,P_counter);
     __syncwarp();
     if (threadIdx.x == 0)
@@ -83,7 +123,7 @@ void test(){
     HRR(cudaMemcpy(a_device, a, sizeof(int) * MAX_COUNT, cudaMemcpyHostToDevice));
     HRR(cudaMemcpy(b_device, b, sizeof(int) * MAX_COUNT, cudaMemcpyHostToDevice));
 
-    for(int test_size = 0; test_size < STEP * 2;test_size += STEP){
+    for(int test_size = 0; test_size < MAX_COUNT;test_size += STEP){
         double time_start = clock();
         test_bs<<<1, 32>>>(a_device, test_size, b_device, test_size,ans_pos);
         HRR(cudaDeviceSynchronize());
@@ -99,6 +139,41 @@ void test(){
         }
 
     }
+
+    for(int test_size = 0; test_size < MAX_COUNT;test_size += STEP){
+        double time_start = clock();
+        test_merge<<<1, 32>>>(a_device, test_size, b_device, test_size,ans_pos);
+        HRR(cudaDeviceSynchronize());
+        double cmp_time = clock() - time_start;
+        double cmptime = cmp_time / CLOCKS_PER_SEC;
+        cpu_container[SINGLE_SIZE + test_size/STEP].time = cmptime;
+        HRR(cudaMemcpy(&cpu_ans, ans_pos , sizeof(int), cudaMemcpyDeviceToHost));
+        if(cpu_ans == gold_ans[test_size/STEP]){
+            cpu_container[SINGLE_SIZE+test_size/STEP].TorF = 1;
+        }else{
+            printf("wrong ans is %d\n",cpu_ans);
+            cpu_container[SINGLE_SIZE+test_size/STEP].TorF = 0;
+        }
+    }
+
+    int *partition_gpu;
+    HRR(cudaMalloc((void **)&partition_gpu,sizeof(int)*1024*HASH_MAX));
+
+    for(int test_size = STEP * 4; test_size < MAX_COUNT;test_size += STEP){
+        double time_start = clock();
+        test_linear<<<1, 32>>>(a_device, test_size, b_device, test_size,ans_pos,partition_gpu);
+        HRR(cudaDeviceSynchronize());
+        double cmp_time = clock() - time_start;
+        double cmptime = cmp_time / CLOCKS_PER_SEC;
+        cpu_container[SINGLE_SIZE * 2 + test_size/STEP].time = cmptime;
+        HRR(cudaMemcpy(&cpu_ans, ans_pos , sizeof(int), cudaMemcpyDeviceToHost));
+        if(cpu_ans == gold_ans[test_size/STEP]){
+            cpu_container[SINGLE_SIZE * 2+test_size/STEP].TorF = 1;
+        }else{
+            printf("wrong ans is %d\n",cpu_ans);
+            cpu_container[SINGLE_SIZE * 2+test_size/STEP].TorF = 0;
+        }
+    }
     
     HRR(cudaFree(a_device));
     HRR(cudaFree(b_device));
@@ -110,9 +185,10 @@ void write_results_to_file(){
         printf("Error opening file!\n");
         return;
     }
-    fprintf(file, "Time(s),Correctness\n"); // 写入表头
-    for(int i = 0; i < CONTAINER_SIZE ; i++){
-        fprintf(file, "%f,%d\n", cpu_container[i].time, cpu_container[i].TorF); // 将每个元素写入文件
+    fprintf(file, "bs\tTime(s)\tCorrectness\tmerge\tTime(s)\tCorrectness\tlinear\tTime(s)\tCorrectness\n"); // 写入表头
+    for(int i = 0; i < SINGLE_SIZE ; i++){
+        fprintf(file, "%f\t%d\t\t%f\t%d\t\t%f\t%d\n", 
+        cpu_container[i].time, cpu_container[i].TorF,cpu_container[SINGLE_SIZE+i].time,cpu_container[SINGLE_SIZE+i].TorF,cpu_container[2*SINGLE_SIZE+i].time,cpu_container[2*SINGLE_SIZE+i].TorF); // 将每个元素写入文件
     }
     fclose(file); // 关闭文件
 }

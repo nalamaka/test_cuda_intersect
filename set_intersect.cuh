@@ -322,7 +322,9 @@ __forceinline__ __device__ T intersect_num_merge(T* a, T size_a, T* b, T size_b)
   else cache[threadIdx.x] = -2;
   __syncwarp();
   while (1) {
-    T last_a = SHFL(key_a, WARP_SIZE-1);
+    // T last_a = SHFL(key_a, WARP_SIZE-1);
+    unsigned mask = 0xffffffff; // Mask for all threads in the warp
+    T last_a = __shfl_sync(mask, key_a, WARP_SIZE-1);
     T last_b = cache[p+WARP_SIZE-1];
     if (key_a >= 0 && binary_search_enhanced(&cache[p], key_a, WARP_SIZE))
       count += 1;
