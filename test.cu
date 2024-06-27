@@ -6,8 +6,8 @@
 #include"gen_test.cuh"
 
 #define MAX_COUNT 100000
-// #define STEP 1000
-#define STEP 5
+#define STEP 10
+// #define STEP 10
 #define TEST_NUM 3
 #define SINGLE_SIZE (MAX_COUNT/STEP)
 #define CONTAINER_SIZE (SINGLE_SIZE * TEST_NUM)
@@ -15,7 +15,7 @@
 
 typedef struct{
     double time;
-    int TorF;
+    int ans;
 }container;
 
 int a[MAX_COUNT];
@@ -23,20 +23,33 @@ int b[MAX_COUNT];
 int gold_ans[SINGLE_SIZE];
 container cpu_container[CONTAINER_SIZE];
 
-// void generate_test(int *a,int count){
-//     for(int i=0;i<count;i++){
-//         a[i] = i;
-//     }
-// }
+void generate_test(int *a,int count){
+    for(int i=0;i<count;i++){
+        a[i] = i;
+    }
+}
 
 void gen_gold_once(int *a,int size_a,int *b,int size_b,int *ans,int pos){
-    ans[pos] = pos * STEP;
+    int temp = 0;
+    for(int i=0;i<size_a;i++){
+        for(int j=0;j<size_b;j++){
+            if(a[i] == b[j]){
+                temp = temp + 1;
+                break;
+            }
+        }
+    }
+    ans[pos] = temp;
 }
 
 void generate_gold_ans(int *a,int size_a,int *b,int size_b,int gold_step,int *gold_container){
     // int end = size_a / gold_step;
     for(int curr_pos = 0;curr_pos < size_a;curr_pos += gold_step){
-        gen_gold_once(a,curr_pos,b,curr_pos,gold_container,curr_pos/gold_step);
+        if(curr_pos > size_b){
+            gen_gold_once(a,curr_pos,b,size_b,gold_container,curr_pos/gold_step);
+        }else{
+            gen_gold_once(a,curr_pos,b,curr_pos,gold_container,curr_pos/gold_step);
+        }
     }
 }
 
@@ -63,6 +76,7 @@ __global__ void test_bs(int *a,int size_a,int *b,int size_b,int *ans_pos){
 		ans_pos[0] = 0;
         G_counter = 0;
 	}
+    __syncwarp();
 #ifndef TEST_ROUNDS
     P_counter = intersect_bs_cache(a,size_a,b,size_b);
 #else
@@ -70,7 +84,7 @@ __global__ void test_bs(int *a,int size_a,int *b,int size_b,int *ans_pos){
         P_counter = intersect_bs_cache(a,size_a,b,size_b);
     }
 #endif
-    // printf("Pcounter:%d\n",P_counter);
+    printf("Pcounter:%d\n",P_counter);
     atomicMax(&G_counter,P_counter);
     __syncwarp();
     if (threadIdx.x == 0)
@@ -90,6 +104,7 @@ __global__ void test_merge(int *a,int size_a,int *b,int size_b,int *ans_pos){
 		ans_pos[0] = 0;
         G_counter = 0;
 	}
+    __syncwarp();
 #ifndef TEST_ROUNDS
     P_counter = intersect_num_merge(a,size_a,b,size_b);
     // printf("Pcounter:%d\n",P_counter);
@@ -117,6 +132,7 @@ __global__ void test_linear(int *a,int size_a,int *b,int size_b,int *ans_pos,int
 		ans_pos[0] = 0;
         G_counter = 0;
 	}
+    __syncwarp();
 #ifndef TEST_ROUNDS
     P_counter = intersect_hash(a,size_a,b,size_b,partition);
 #else
@@ -128,7 +144,6 @@ __global__ void test_linear(int *a,int size_a,int *b,int size_b,int *ans_pos,int
         P_counter = single_search_static(shared_partition,partition,bin_count,b,size_b);
     }
 #endif
-    // printf("Pcounter:%d\n",P_counter);
     atomicAdd(&G_counter,P_counter);
     __syncwarp();
     if (threadIdx.x == 0)
@@ -159,12 +174,7 @@ void test(int count_a,int count_b){
         double cmptime = cmp_time / CLOCKS_PER_SEC;
         cpu_container[test_size/STEP].time = cmptime;
         HRR(cudaMemcpy(&cpu_ans, ans_pos , sizeof(int), cudaMemcpyDeviceToHost));
-        if(cpu_ans == gold_ans[test_size/STEP]){
-            cpu_container[test_size/STEP].TorF = 1;
-        }else{
-            printf("wrong ans is %d\n",cpu_ans);
-            cpu_container[test_size/STEP].TorF = 0;
-        }
+        cpu_container[test_size/STEP].ans = cpu_ans;
 
     }
 
@@ -176,12 +186,7 @@ void test(int count_a,int count_b){
         double cmptime = cmp_time / CLOCKS_PER_SEC;
         cpu_container[SINGLE_SIZE + test_size/STEP].time = cmptime;
         HRR(cudaMemcpy(&cpu_ans, ans_pos , sizeof(int), cudaMemcpyDeviceToHost));
-        if(cpu_ans == gold_ans[test_size/STEP]){
-            cpu_container[SINGLE_SIZE+test_size/STEP].TorF = 1;
-        }else{
-            printf("wrong ans is %d\n",cpu_ans);
-            cpu_container[SINGLE_SIZE+test_size/STEP].TorF = 0;
-        }
+        cpu_container[SINGLE_SIZE+test_size/STEP].ans = cpu_ans;
     }
 
     int *partition_gpu;
@@ -195,12 +200,7 @@ void test(int count_a,int count_b){
         double cmptime = cmp_time / CLOCKS_PER_SEC;
         cpu_container[SINGLE_SIZE * 2 + test_size/STEP].time = cmptime;
         HRR(cudaMemcpy(&cpu_ans, ans_pos , sizeof(int), cudaMemcpyDeviceToHost));
-        if(cpu_ans == gold_ans[test_size/STEP]){
-            cpu_container[SINGLE_SIZE * 2+test_size/STEP].TorF = 1;
-        }else{
-            printf("wrong ans is %d\n",cpu_ans);
-            cpu_container[SINGLE_SIZE * 2+test_size/STEP].TorF = 0;
-        }
+        cpu_container[SINGLE_SIZE * 2+test_size/STEP].ans = cpu_ans;
     }
     
     HRR(cudaFree(a_device));
@@ -213,10 +213,10 @@ void write_results_to_file(){
         printf("Error opening file!\n");
         return;
     }
-    fprintf(file, "size\tbs\tTime(s)\tCorrectness\tmerge\tTime(s)\tCorrectness\tlinear\tTime(s)\tCorrectness\n"); // 写入表头
+    fprintf(file, "gold_ans\tsize\tbs\tTime(s)\tCorrectness\tmerge\tTime(s)\tCorrectness\tlinear\tTime(s)\tCorrectness\n"); // 写入表头
     for(int i = 0; i < SINGLE_SIZE ; i++){
-        fprintf(file, "%10d\t%10f\t%1d\t\t%10f\t%1d\t\t%10f\t%1d\n", 
-        i*STEP,cpu_container[i].time, cpu_container[i].TorF,cpu_container[SINGLE_SIZE+i].time,cpu_container[SINGLE_SIZE+i].TorF,cpu_container[2*SINGLE_SIZE+i].time,cpu_container[2*SINGLE_SIZE+i].TorF); // 将每个元素写入文件
+        fprintf(file, "%10d\t%10d\t%10f\t%1d\t\t%10f\t%1d\t\t%10f\t%1d\n", 
+        gold_ans[i],i*STEP,cpu_container[i].time, cpu_container[i].ans,cpu_container[SINGLE_SIZE+i].time,cpu_container[SINGLE_SIZE+i].ans,cpu_container[2*SINGLE_SIZE+i].time,cpu_container[2*SINGLE_SIZE+i].ans); // 将每个元素写入文件
     }
     fclose(file); // 关闭文件
 }
@@ -227,6 +227,8 @@ int main(int argc,char ** argv ){
     int count_a = 100;
     int count_b;
     gen_test(argv[1],a,&count_a,b,&count_b);
+    // generate_test(a,count_a);
+    // generate_test(b,count_b);
     generate_gold_ans(a,count_a,b,count_b,STEP,gold_ans);
     
     test(count_a,count_b);

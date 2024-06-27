@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <sys/mman.h>
+// #include <sys/mman.h>
 #include <set>
 #include <map>
 #include <deque>
@@ -61,15 +61,8 @@ typedef std::unordered_map<vlabel_t, int> nlf_map;
 #define NUM_WARPS (BLOCK_SIZE / WARP_SIZE)
 #define BYTESTOMB(memory_cost) ((memory_cost)/(double)(1024 * 1024))
 
-enum Status {
-  Idle,
-  Extending,
-  IteratingEdge,
-  Working,
-  ReWorking
-};
 
-#define OP_INTERSECT 'i'
+
 #define OP_DIFFERENCE 'd'
 extern std::map<char,double> time_ops;
 
