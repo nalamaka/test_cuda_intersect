@@ -1,1 +1,8 @@
+# ignore all file without .
+*
+!*.*
+!*/
+
 *.txt
+DATA/*.mmio
+DATA/*.bin
