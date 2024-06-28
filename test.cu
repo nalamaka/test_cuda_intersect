@@ -11,7 +11,7 @@
 #define TEST_NUM 3
 #define SINGLE_SIZE (MAX_COUNT/STEP)
 #define CONTAINER_SIZE (SINGLE_SIZE * TEST_NUM)
-#define TEST_ROUNDS 20
+// #define TEST_ROUNDS 20
 
 typedef struct{
     double time;
@@ -52,19 +52,6 @@ void generate_gold_ans(int *a,int size_a,int *b,int size_b,int gold_step,int *go
         }
     }
 }
-
-void write_results_to_file(int *results, int size, const char *filename){
-    FILE *file = fopen(filename, "w"); // 打开文件以便写入
-    if(file == NULL){
-        printf("Error opening file!\n");
-        return;
-    }
-    for(int i = 0; i < size; i++){
-        fprintf(file, "%d\n", results[i]); // 将每个元素写入文件
-    }
-    fclose(file); // 关闭文件
-}
-
 __global__ void test_bs(int *a,int size_a,int *b,int size_b,int *ans_pos){
     // printf("a1:%d,b1:%d\n",a[1],b[1]);
     // printf("a10:%d,b10:%d\n",a[10],b[10]);
@@ -76,7 +63,7 @@ __global__ void test_bs(int *a,int size_a,int *b,int size_b,int *ans_pos){
 		ans_pos[0] = 0;
         G_counter = 0;
 	}
-    __syncwarp();
+    __syncthreads();
 #ifndef TEST_ROUNDS
     P_counter = intersect_bs_cache(a,size_a,b,size_b);
 #else
@@ -84,10 +71,10 @@ __global__ void test_bs(int *a,int size_a,int *b,int size_b,int *ans_pos){
         P_counter = intersect_bs_cache(a,size_a,b,size_b);
     }
 #endif
-    printf("Pcounter:%d\n",P_counter);
+    // printf("Pcounter:%d\n",P_counter);
     atomicMax(&G_counter,P_counter);
     __syncwarp();
-    if (threadIdx.x == 0)
+    if (threadIdx.x  == 0)
 	{
 		atomicAdd(&ans_pos[0], G_counter);
 	}
@@ -104,7 +91,7 @@ __global__ void test_merge(int *a,int size_a,int *b,int size_b,int *ans_pos){
 		ans_pos[0] = 0;
         G_counter = 0;
 	}
-    __syncwarp();
+    __syncthreads();
 #ifndef TEST_ROUNDS
     P_counter = intersect_num_merge(a,size_a,b,size_b);
     // printf("Pcounter:%d\n",P_counter);
@@ -132,17 +119,19 @@ __global__ void test_linear(int *a,int size_a,int *b,int size_b,int *ans_pos,int
 		ans_pos[0] = 0;
         G_counter = 0;
 	}
-    __syncwarp();
-#ifndef TEST_ROUNDS
-    P_counter = intersect_hash(a,size_a,b,size_b,partition);
-#else
+    __syncthreads();
     __shared__ int bin_count[HASH_MAX];
 	__shared__ int shared_partition[HASH_MAX * shared_BUCKET_SIZE + 1];
-	gen_bin(a, size_a, shared_partition,partition,bin_count);
-	__syncwarp();
-    for(int i=0;i < TEST_ROUNDS;i++){
-        P_counter = single_search_static(shared_partition,partition,bin_count,b,size_b);
-    }
+#ifndef TEST_ROUNDS
+    P_counter = single_search_warp_static(shared_partition,partition,bin_count,a,size_a,b,size_b);
+#else
+    // __shared__ int bin_count[HASH_MAX];
+	// __shared__ int shared_partition[HASH_MAX * shared_BUCKET_SIZE + 1];
+	// gen_bin(a, size_a, shared_partition,partition,bin_count);
+	// __syncwarp();
+    // for(int i=0;i < TEST_ROUNDS;i++){
+    //     P_counter = single_search_static(shared_partition,partition,bin_count,b,size_b);
+    // }
 #endif
     atomicAdd(&G_counter,P_counter);
     __syncwarp();
@@ -168,7 +157,7 @@ void test(int count_a,int count_b){
 
     for(int test_size = 0; test_size < count_a && test_size < count_b;test_size += STEP){
         double time_start = clock();
-        test_bs<<<1, 32>>>(a_device, test_size, b_device, test_size,ans_pos);
+        test_bs<<<1, BLOCK_SIZE>>>(a_device, test_size, b_device, test_size,ans_pos);
         HRR(cudaDeviceSynchronize());
         double cmp_time = clock() - time_start;
         double cmptime = cmp_time / CLOCKS_PER_SEC;
@@ -180,7 +169,7 @@ void test(int count_a,int count_b){
 
     for(int test_size = 0; test_size < count_a && test_size < count_b;test_size += STEP){
         double time_start = clock();
-        test_merge<<<1, 32>>>(a_device, test_size, b_device, test_size,ans_pos);
+        test_merge<<<1, BLOCK_SIZE>>>(a_device, test_size, b_device, test_size,ans_pos);
         HRR(cudaDeviceSynchronize());
         double cmp_time = clock() - time_start;
         double cmptime = cmp_time / CLOCKS_PER_SEC;
@@ -194,7 +183,7 @@ void test(int count_a,int count_b){
 
     for(int test_size = 0; test_size < count_a && test_size < count_b;test_size += STEP){
         double time_start = clock();
-        test_linear<<<1, 32>>>(a_device, test_size, b_device, test_size,ans_pos,partition_gpu);
+        test_linear<<<1, BLOCK_SIZE>>>(a_device, test_size, b_device, test_size,ans_pos,partition_gpu);
         HRR(cudaDeviceSynchronize());
         double cmp_time = clock() - time_start;
         double cmptime = cmp_time / CLOCKS_PER_SEC;
@@ -207,8 +196,8 @@ void test(int count_a,int count_b){
     HRR(cudaFree(b_device));
 }
 
-void write_results_to_file(){
-    FILE *file = fopen("./out.txt", "w"); // 打开文件以便写入
+void write_results_to_file(char *filename){
+    FILE *file = fopen(filename, "w"); // 打开文件以便写入
     if(file == NULL){
         printf("Error opening file!\n");
         return;
@@ -233,5 +222,5 @@ int main(int argc,char ** argv ){
     
     test(count_a,count_b);
 
-    write_results_to_file();
+    write_results_to_file(argv[2]);
 }

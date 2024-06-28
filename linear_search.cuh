@@ -1,24 +1,32 @@
 #pragma once
 #include "search.cuh"
-#define HASH_MAX 1024
-#define MODULO (HASH_MAX - 1)
-#define WARPSIZE 32
 #define shared_BUCKET_SIZE 6
+#define shared_BUCKET_SIZE 6
+#define SUM_SIZE 1
+#define USE_WARP 2
+#define without_combination 0
+#define use_static 1
+
+#define HASE_BIT_SIZE 10
+#define HASH_MAX (1 << HASE_BIT_SIZE)
+#define THREAD_MODULO (HASH_MAX - 1)
+#define WARPSIZE 32
+#define WARP_BUCKETNUM (HASH_MAX/WARPSIZE)
+#define WARP_MODULO (WARP_BUCKETNUM - 1)
+
 template <typename T = vidType>
-__forceinline__ __device__ void gen_bin(T* a, T size_a, T* bin_loc,T*partition_loc,T* bin_count){
-	int WARP_TID = threadIdx.x % WARPSIZE;
-	for (int i = WARP_TID; i < HASH_MAX; i += 32){
+__forceinline__ __device__ void gen_block_shared_bin(T* a, T size_a, T* bin_loc,T*partition_loc,T* bin_count){
+	for (int i = threadIdx.x; i < HASH_MAX; i += blockDim.x){
 		bin_count[i] = 0;
 	}
 	// show_bin(bin_loc,partition_loc,bin_count);
-	__syncwarp();
-	int start = 0;
+	__syncthreads();
 	int end = size_a;
-	int now = threadIdx.x + start;
+	int now = threadIdx.x;
 	while (now < end)
 	{
 		int temp = a[now];
-		int bin = temp & MODULO;
+		int bin = temp & THREAD_MODULO;
 		int index;
 		index = atomicAdd(&bin_count[bin], 1);
 		if (index < 6)
@@ -32,13 +40,44 @@ __forceinline__ __device__ void gen_bin(T* a, T size_a, T* bin_loc,T*partition_l
 		}else{
 			printf("Error: index out of range\n");
 		}
-		now += WARPSIZE;
+		now += blockDim.x;
 	}
+	__syncthreads();
 }
 
 template <typename T = vidType>
-__forceinline__ __device__ T linear_search(T*bin_loc,T*partition_loc,T*bin_count,T tosearch){
-	int bin = tosearch & MODULO;
+__forceinline__ __device__ void gen_warp_shared_bin(T* a, T size_a, T* bin_loc,T*partition_loc,T* bin_count,int bin_offset){
+	int WARP_TID = threadIdx.x & WARP_MODULO;
+	for (int i = bin_offset + WARP_TID; i < bin_offset + WARP_BUCKETNUM; i += WARPSIZE){
+		bin_count[i] = 0;
+	}
+	__syncwarp();
+	int now = threadIdx.x % WARPSIZE;
+	int end = size_a;
+	// count hash bin
+	while (now < end)
+	{
+		T temp = a[now];
+		int bin = temp & WARP_MODULO;
+		bin += bin_offset;
+		int index;
+		index = atomicAdd(&bin_count[bin], 1);
+		if (index < shared_BUCKET_SIZE)
+		{
+			bin_loc[index * HASH_MAX + bin] = temp;
+		}
+		else if (index < BUCKET_SIZE)
+		{
+			index = index - shared_BUCKET_SIZE;
+			partition_loc[index * HASH_MAX + bin] = temp;
+		}
+		now += WARPSIZE;
+	}
+	__syncwarp();
+}
+
+template <typename T = vidType>
+__forceinline__ __device__ T linear_search(T*bin_loc,T*partition_loc,T*bin_count,T bin,T tosearch){
 	int len = bin_count[bin];
 	int i = bin;
 	int step = 0;
@@ -73,29 +112,22 @@ __forceinline__ __device__ T linear_search(T*bin_loc,T*partition_loc,T*bin_count
 }
 
 template <typename T = vidType>
-__forceinline__ __device__ T single_search_static(T*bin_loc,T*partition_loc,T*bin_count,T*b,T size_b){
+__forceinline__ __device__ T single_search_block_static(T*bin_loc,T*partition_loc,T*bin_count,T*a,T size_a,T*b,T size_b){
 	int temp_ans = 0;
+	gen_block_shared_bin(a,size_a,bin_loc,partition_loc,bin_count);
 	for(int i = threadIdx.x; i < size_b;i+=blockDim.x){
-		temp_ans += linear_search(bin_loc,partition_loc,bin_count,b[i]);
+		temp_ans += linear_search(bin_loc,partition_loc,bin_count,b[i] & THREAD_MODULO,b[i]);
 	}
 	return temp_ans;
 }
 
 template <typename T = vidType>
-__forceinline__ __device__ T single_search_dynamic(T*bin_loc,T*partition_loc,T*bin_count,T*b,T size_b,int *shared_iret){
+__forceinline__ __device__ T single_search_warp_static(T*bin_loc,T*partition_loc,T*bin_count,T*a,T size_a,T*b,T size_b){
 	int temp_ans = 0;
-	int iret = atomicAdd(shared_iret,1);
-	for(; iret < size_b;iret = atomicAdd(shared_iret,1)){
-		temp_ans += linear_search(bin_loc,partition_loc,bin_count,b[iret]);
+	int bin_offset = (threadIdx.x / WARPSIZE) * WARP_BUCKETNUM;
+	gen_warp_shared_bin(a,size_a,bin_loc,partition_loc,bin_count,bin_offset);
+	for(int i = threadIdx.x; i < size_b;i+=blockDim.x){
+		temp_ans += linear_search(bin_loc,partition_loc,bin_count,(b[i] & WARP_MODULO) + bin_offset,b[i]);
 	}
 	return temp_ans;
-}
-
-template <typename T = vidType>
-__forceinline__ __device__ T intersect_hash(T* a, T size_a, T* b, T size_b,T *partition){
-	__shared__ int bin_count[HASH_MAX];
-	__shared__ int shared_partition[HASH_MAX * shared_BUCKET_SIZE + 1];
-	gen_bin(a, size_a, shared_partition,partition,bin_count);
-	__syncwarp();
-	return single_search_static(shared_partition,partition,bin_count,b,size_b);
 }
