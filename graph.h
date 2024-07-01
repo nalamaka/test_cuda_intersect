@@ -41,8 +41,8 @@ class graph
 	}
 	void read_graph(const std::string filename);
 	~graph(){
-		// vertices.clear();
-		edges.clear();
+		this->edges.clear();
+		this->adj_list.clear();
 	}
 };
 

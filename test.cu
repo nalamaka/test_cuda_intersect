@@ -12,188 +12,202 @@
 #define SINGLE_SIZE (MAX_COUNT/STEP)
 #define CONTAINER_SIZE (SINGLE_SIZE * TEST_NUM)
 // #define TEST_ROUNDS 20
+#define TEST_MIN_DEGREE 2
+#define TEST_MAX_DEGREE 30
 
 typedef struct{
     double time;
     int ans;
 }container;
 
-int a[MAX_COUNT];
-int b[MAX_COUNT];
-int gold_ans[SINGLE_SIZE];
 container cpu_container[CONTAINER_SIZE];
 
-void generate_test(int *a,int count){
-    for(int i=0;i<count;i++){
-        a[i] = i;
-    }
-}
-
-void gen_gold_once(int *a,int size_a,int *b,int size_b,int *ans,int pos){
-    int temp = 0;
-    for(int i=0;i<size_a;i++){
-        for(int j=0;j<size_b;j++){
-            if(a[i] == b[j]){
-                temp = temp + 1;
-                break;
-            }
-        }
-    }
-    ans[pos] = temp;
-}
-
-void generate_gold_ans(int *a,int size_a,int *b,int size_b,int gold_step,int *gold_container){
-    // int end = size_a / gold_step;
-    for(int curr_pos = 0;curr_pos < size_a;curr_pos += gold_step){
-        if(curr_pos > size_b){
-            gen_gold_once(a,curr_pos,b,size_b,gold_container,curr_pos/gold_step);
-        }else{
-            gen_gold_once(a,curr_pos,b,curr_pos,gold_container,curr_pos/gold_step);
-        }
-    }
-}
-__global__ void test_bs(int *a,int size_a,int *b,int size_b,int *ans_pos){
+__global__ void test_bs(int *beg_pos_device,int * adj_list_device,int num_vertex,unsigned long long *ans_pos){
     // printf("a1:%d,b1:%d\n",a[1],b[1]);
     // printf("a10:%d,b10:%d\n",a[10],b[10]);
     // printf("sizea:%d,sizeb:%d\n",size_a,size_b);
-    __shared__ int G_counter;
-    int P_counter;
+    __shared__ unsigned long long G_counter[BLOCK_SIZE/WARPSIZE];
+    unsigned long long P_counter = 0;
+    int warp_id = (threadIdx.x >> 5) & 31;
+    int In_warp_id = threadIdx.x & 31;
     if (threadIdx.x == 0)
 	{
 		ans_pos[0] = 0;
-        G_counter = 0;
 	}
+    if(In_warp_id == 0){
+        G_counter[warp_id] = 0;
+    }
     __syncthreads();
-#ifndef TEST_ROUNDS
-    P_counter = intersect_bs_cache(a,size_a,b,size_b);
-#else
-    for(int i=0;i < TEST_ROUNDS;i++){
-        P_counter = intersect_bs_cache(a,size_a,b,size_b);
-    }
+    int now = warp_id;
+    while(now < num_vertex){
+        int vertex_start = beg_pos_device[now];
+        int vertex_degree = beg_pos_device[now + 1] - vertex_start;
+        if(vertex_degree >= TEST_MAX_DEGREE || vertex_degree <= TEST_MIN_DEGREE){
+            now += BLOCK_SIZE/WARPSIZE;
+            continue;
+        }
+        int warp_iret = vertex_start;
+        while(warp_iret < vertex_degree){
+            int to_search = adj_list_device[warp_iret];
+            int to_search_start = beg_pos_device[to_search];
+            int to_search_degree = beg_pos_device[to_search+1] - to_search_start;
+            P_counter += intersect_bs(adj_list_device + vertex_start,vertex_degree,adj_list_device + to_search_start, to_search_degree);
+            warp_iret += 1;
+        }
+#ifndef __DYNAMIC
+        now += BLOCK_SIZE/WARPSIZE;
 #endif
-    // printf("Pcounter:%d\n",P_counter);
-    atomicMax(&G_counter,P_counter);
-    __syncwarp();
-    if (threadIdx.x  == 0)
-	{
-		atomicAdd(&ans_pos[0], G_counter);
-	}
-}
-
-__global__ void test_merge(int *a,int size_a,int *b,int size_b,int *ans_pos){
-    // printf("a1:%d,b1:%d\n",a[1],b[1]);
-    // printf("a10:%d,b10:%d\n",a[10],b[10]);
-    // printf("sizea:%d,sizeb:%d\n",size_a,size_b);
-    __shared__ int G_counter;
-    int P_counter;
-    if (threadIdx.x == 0)
-	{
-		ans_pos[0] = 0;
-        G_counter = 0;
-	}
+    }
+    if(In_warp_id == 31){
+        atomicAdd(&G_counter[warp_id],P_counter);
+    }
     __syncthreads();
-#ifndef TEST_ROUNDS
-    P_counter = intersect_num_merge(a,size_a,b,size_b);
-    // printf("Pcounter:%d\n",P_counter);
-#else
-    for(int i=0;i < TEST_ROUNDS;i++){
-        P_counter = intersect_num_merge(a,size_a,b,size_b);
-    }
-#endif
-    atomicAdd(&G_counter,P_counter);
-    __syncwarp();
-    if (threadIdx.x == 0)
+    if (In_warp_id == 0)
 	{
-		atomicAdd(&ans_pos[0], G_counter);
+		atomicAdd(&ans_pos[0], G_counter[warp_id]);
 	}
 }
 
-__global__ void test_linear(int *a,int size_a,int *b,int size_b,int *ans_pos,int *partition){
+__global__ void test_merge(int *beg_pos_device,int * adj_list_device,int num_vertex,unsigned long long *ans_pos){
     // printf("a1:%d,b1:%d\n",a[1],b[1]);
     // printf("a10:%d,b10:%d\n",a[10],b[10]);
     // printf("sizea:%d,sizeb:%d\n",size_a,size_b);
-    __shared__ int G_counter;
-    int P_counter;
+    __shared__ int G_counter[BLOCK_SIZE/WARPSIZE];
+    unsigned long long P_counter = 0;
+    int warp_id = (threadIdx.x >> 5) & 31;
+    int In_warp_id = threadIdx.x & 31;
     if (threadIdx.x == 0)
 	{
 		ans_pos[0] = 0;
-        G_counter = 0;
 	}
+    if(In_warp_id == 0){
+        G_counter[warp_id] = 0;
+    }
+    __syncthreads();
+    int now = warp_id;
+    while(now < num_vertex){
+        int vertex_start = beg_pos_device[now];
+        int vertex_degree = beg_pos_device[now + 1] - vertex_start;
+        if(vertex_degree >= TEST_MAX_DEGREE || vertex_degree <= TEST_MIN_DEGREE){
+            now += BLOCK_SIZE/WARPSIZE;
+            continue;
+        }
+        int warp_iret = vertex_start;
+        while(warp_iret < vertex_degree){
+            int to_search = adj_list_device[warp_iret];
+            int to_search_start = beg_pos_device[to_search];
+            int to_search_degree = beg_pos_device[to_search+1] - to_search_start;
+            P_counter += intersect_num_merge(adj_list_device + vertex_start,vertex_degree,adj_list_device + to_search_start, to_search_degree);
+            warp_iret += 1;
+        }
+#ifndef __DYNAMIC
+        now += BLOCK_SIZE/WARPSIZE;
+#endif
+    }
+    atomicAdd(&G_counter[warp_id],P_counter);
+    __syncthreads();
+    if (In_warp_id == 0)
+	{
+		atomicAdd(&ans_pos[0], G_counter[warp_id]);
+	}
+}
+
+__global__ void test_linear(int *beg_pos_device,int * adj_list_device,int num_vertex,unsigned long long *ans_pos,int *partition){
+    // printf("a1:%d,b1:%d\n",a[1],b[1]);
+    // printf("a10:%d,b10:%d\n",a[10],b[10]);
+    // printf("sizea:%d,sizeb:%d\n",size_a,size_b);
+    __shared__ unsigned long long G_counter[BLOCK_SIZE/WARPSIZE];
+    unsigned long long P_counter = 0;
+    int warp_id = (threadIdx.x >> 5) & 31;
+    int In_warp_id = threadIdx.x & 31;
+    if (threadIdx.x == 0)
+	{
+		ans_pos[0] = 0;
+	}
+    if(In_warp_id == 0){
+        G_counter[warp_id] = 0;
+    }
     __syncthreads();
     __shared__ int bin_count[HASH_MAX];
-	__shared__ int shared_partition[HASH_MAX * shared_BUCKET_SIZE + 1];
-#ifndef TEST_ROUNDS
-    P_counter = single_search_warp_static(shared_partition,partition,bin_count,a,size_a,b,size_b);
-#else
-    // __shared__ int bin_count[HASH_MAX];
-	// __shared__ int shared_partition[HASH_MAX * shared_BUCKET_SIZE + 1];
-	// gen_bin(a, size_a, shared_partition,partition,bin_count);
-	// __syncwarp();
-    // for(int i=0;i < TEST_ROUNDS;i++){
-    //     P_counter = single_search_static(shared_partition,partition,bin_count,b,size_b);
-    // }
+	__shared__ int shared_partition[HASH_MAX * shared_BUCKET_SIZE + 1];//shared hash bin
+    int now = warp_id;
+    while(now < num_vertex){
+        int vertex_start = beg_pos_device[now];
+        int vertex_degree = beg_pos_device[now + 1] - vertex_start;
+        if(vertex_degree >= TEST_MAX_DEGREE || vertex_degree <= TEST_MIN_DEGREE){
+            now += BLOCK_SIZE/WARPSIZE;
+            continue;
+        }
+        int warp_iret = vertex_start + warp_id;
+        while(warp_iret < vertex_degree){
+            int to_search = adj_list_device[warp_iret];
+            int to_search_start = beg_pos_device[to_search];
+            int to_search_degree = beg_pos_device[to_search+1] - to_search_start;
+            P_counter += single_search_warp_static(shared_partition,partition,bin_count,adj_list_device + vertex_start,vertex_degree,adj_list_device + to_search_start, to_search_degree);
+            warp_iret += 1;
+        }
+#ifndef __DYNAMIC
+        now += BLOCK_SIZE/WARPSIZE;
 #endif
-    atomicAdd(&G_counter,P_counter);
-    __syncwarp();
-    if (threadIdx.x == 0)
+    }
+    atomicAdd(&G_counter[warp_id],P_counter);
+    __syncthreads();
+    if (In_warp_id == 0)
 	{
-		atomicAdd(&ans_pos[0], G_counter);
+		atomicAdd(&ans_pos[0], G_counter[warp_id]);
 	}
 }
 
-void test(int count_a,int count_b){
+void test(int *beg_pos,int *adj_list,int num_vertex,int num_edge){
     
-    int *a_device;
-    int *b_device;
-    int *ans_pos;
-    int cpu_ans;
+    int *beg_pos_device;
+    int *adj_list_device;
+    unsigned long long *ans_pos;
+    unsigned long long  cpu_ans;
 
-    HRR(cudaMalloc((void **)&a_device,sizeof(int)*MAX_COUNT));
-    HRR(cudaMalloc((void **)&b_device,sizeof(int)*MAX_COUNT));
-    HRR(cudaMalloc((void **)&ans_pos,sizeof(int)*MAX_COUNT));
+    HRR(cudaMalloc((void **)&beg_pos_device,sizeof(int)*(num_vertex + 1)));
+    HRR(cudaMalloc((void **)&adj_list_device,sizeof(int)*num_edge));
+    HRR(cudaMalloc((void **)&ans_pos,sizeof(unsigned long long )));
 
-    HRR(cudaMemcpy(a_device, a, sizeof(int) * MAX_COUNT, cudaMemcpyHostToDevice));
-    HRR(cudaMemcpy(b_device, b, sizeof(int) * MAX_COUNT, cudaMemcpyHostToDevice));
+    HRR(cudaMemcpy(beg_pos_device, beg_pos, sizeof(int)*(num_vertex + 1), cudaMemcpyHostToDevice));
+    HRR(cudaMemcpy(adj_list_device, adj_list, sizeof(int)*num_edge, cudaMemcpyHostToDevice));
 
-    for(int test_size = 0; test_size < count_a && test_size < count_b;test_size += STEP){
-        double time_start = clock();
-        test_bs<<<1, BLOCK_SIZE>>>(a_device, test_size, b_device, test_size,ans_pos);
-        HRR(cudaDeviceSynchronize());
-        double cmp_time = clock() - time_start;
-        double cmptime = cmp_time / CLOCKS_PER_SEC;
-        cpu_container[test_size/STEP].time = cmptime;
-        HRR(cudaMemcpy(&cpu_ans, ans_pos , sizeof(int), cudaMemcpyDeviceToHost));
-        cpu_container[test_size/STEP].ans = cpu_ans;
+    //bs test
+    double time_start = clock();
+    test_bs<<<1, BLOCK_SIZE>>>(beg_pos_device, adj_list_device, num_vertex,ans_pos);
+    HRR(cudaDeviceSynchronize());
+    double cmp_time = clock() - time_start;
+    double cmptime = cmp_time / CLOCKS_PER_SEC;
+    cpu_container[0].time = cmptime;
+    HRR(cudaMemcpy(&cpu_ans, ans_pos , sizeof(unsigned long long ), cudaMemcpyDeviceToHost));
+    cpu_container[0].ans = cpu_ans;
 
-    }
-
-    for(int test_size = 0; test_size < count_a && test_size < count_b;test_size += STEP){
-        double time_start = clock();
-        test_merge<<<1, BLOCK_SIZE>>>(a_device, test_size, b_device, test_size,ans_pos);
-        HRR(cudaDeviceSynchronize());
-        double cmp_time = clock() - time_start;
-        double cmptime = cmp_time / CLOCKS_PER_SEC;
-        cpu_container[SINGLE_SIZE + test_size/STEP].time = cmptime;
-        HRR(cudaMemcpy(&cpu_ans, ans_pos , sizeof(int), cudaMemcpyDeviceToHost));
-        cpu_container[SINGLE_SIZE+test_size/STEP].ans = cpu_ans;
-    }
+    //merge test
+    time_start = clock();
+    test_merge<<<1, BLOCK_SIZE>>>(beg_pos_device, adj_list_device, num_vertex,ans_pos);
+    HRR(cudaDeviceSynchronize());
+    cmp_time = clock() - time_start;
+    cmptime = cmp_time / CLOCKS_PER_SEC;
+    cpu_container[SINGLE_SIZE].time = cmptime;
+    HRR(cudaMemcpy(&cpu_ans, ans_pos , sizeof(unsigned long long ), cudaMemcpyDeviceToHost));
+    cpu_container[SINGLE_SIZE].ans = cpu_ans;
 
     int *partition_gpu;
     HRR(cudaMalloc((void **)&partition_gpu,sizeof(int)*1024*HASH_MAX));
 
-    for(int test_size = 0; test_size < count_a && test_size < count_b;test_size += STEP){
-        double time_start = clock();
-        test_linear<<<1, BLOCK_SIZE>>>(a_device, test_size, b_device, test_size,ans_pos,partition_gpu);
-        HRR(cudaDeviceSynchronize());
-        double cmp_time = clock() - time_start;
-        double cmptime = cmp_time / CLOCKS_PER_SEC;
-        cpu_container[SINGLE_SIZE * 2 + test_size/STEP].time = cmptime;
-        HRR(cudaMemcpy(&cpu_ans, ans_pos , sizeof(int), cudaMemcpyDeviceToHost));
-        cpu_container[SINGLE_SIZE * 2+test_size/STEP].ans = cpu_ans;
-    }
+    time_start = clock();
+    dynamic_assign<<<1, BLOCK_SIZE>>>(adj_list_device, beg_pos_device,num_edge,num_vertex,partition_gpu, ans_pos);
+    HRR(cudaDeviceSynchronize());
+    cmp_time = clock() - time_start;
+    cmptime = cmp_time / CLOCKS_PER_SEC;
+    cpu_container[SINGLE_SIZE * 2].time = cmptime;
+    HRR(cudaMemcpy(&cpu_ans, ans_pos , sizeof(unsigned long long ), cudaMemcpyDeviceToHost));
+    cpu_container[SINGLE_SIZE * 2].ans = cpu_ans;
     
-    HRR(cudaFree(a_device));
-    HRR(cudaFree(b_device));
+    HRR(cudaFree(beg_pos_device));
+    HRR(cudaFree(adj_list_device));
+    HRR(cudaFree(ans_pos));
+    HRR(cudaFree(partition_gpu));
 }
 
 void write_results_to_file(char *filename){
@@ -204,8 +218,8 @@ void write_results_to_file(char *filename){
     }
     fprintf(file, "gold_ans\tsize\tbs\tTime(s)\tCorrectness\tmerge\tTime(s)\tCorrectness\tlinear\tTime(s)\tCorrectness\n"); // 写入表头
     for(int i = 0; i < SINGLE_SIZE ; i++){
-        fprintf(file, "%10d\t%10d\t%10f\t%1d\t\t%10f\t%1d\t\t%10f\t%1d\n", 
-        gold_ans[i],i*STEP,cpu_container[i].time, cpu_container[i].ans,cpu_container[SINGLE_SIZE+i].time,cpu_container[SINGLE_SIZE+i].ans,cpu_container[2*SINGLE_SIZE+i].time,cpu_container[2*SINGLE_SIZE+i].ans); // 将每个元素写入文件
+        fprintf(file, "%10d\t%10f\t%1d\t\t%10f\t%1d\t\t%10f\t%1d\n", 
+        i*STEP,cpu_container[i].time, cpu_container[i].ans,cpu_container[SINGLE_SIZE+i].time,cpu_container[SINGLE_SIZE+i].ans,cpu_container[2*SINGLE_SIZE+i].time,cpu_container[2*SINGLE_SIZE+i].ans); // 将每个元素写入文件
     }
     fclose(file); // 关闭文件
 }
@@ -213,14 +227,12 @@ void write_results_to_file(char *filename){
 int main(int argc,char ** argv ){
     // generate_test(a,MAX_COUNT);
     // generate_test(b,MAX_COUNT);
-    int count_a = 100;
-    int count_b;
-    gen_test(argv[1],a,&count_a,b,&count_b);
-    // generate_test(a,count_a);
-    // generate_test(b,count_b);
-    generate_gold_ans(a,count_a,b,count_b,STEP,gold_ans);
+    int *beg_pos;//list of the start of the vertex
+    int *adj_list;//list of the end of the edge
+    int num_edge;
+    int num_vertex;
+    gen_test(argv[1],&beg_pos,&adj_list,&num_vertex,&num_edge);
     
-    test(count_a,count_b);
-
+    test(beg_pos,adj_list,num_vertex,num_edge);
     write_results_to_file(argv[2]);
 }

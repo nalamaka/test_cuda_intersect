@@ -126,7 +126,7 @@ __forceinline__ __device__ T single_search_warp_static(T*bin_loc,T*partition_loc
 	int temp_ans = 0;
 	int bin_offset = (threadIdx.x / WARPSIZE) * WARP_BUCKETNUM;
 	gen_warp_shared_bin(a,size_a,bin_loc,partition_loc,bin_count,bin_offset);
-	for(int i = threadIdx.x; i < size_b;i+=blockDim.x){
+	for(int i = threadIdx.x; i < size_b;i+=WARPSIZE){
 		temp_ans += linear_search(bin_loc,partition_loc,bin_count,(b[i] & WARP_MODULO) + bin_offset,b[i]);
 	}
 	return temp_ans;

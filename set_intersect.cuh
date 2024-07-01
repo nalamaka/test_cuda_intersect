@@ -512,3 +512,4 @@ __forceinline__ __device__ T intersect_num(T* a, T size_a, T* b, T size_b, T* an
   }
   return num;
 }
+__global__ void dynamic_assign(int *adj_list, int *beg_pos, int edge_count, int vertex_count, int *partition, unsigned long long *GLOBAL_COUNT);

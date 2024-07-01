@@ -37,5 +37,6 @@ void graph::read_graph(const std::string filename){
 		this->start_list[i] = this->edges[i].start_pos;
 		this->end_list[i] = this->edges[i].end_pos;
 	}
+	this->vertex_start[this->num_vertex] = this->num_edges;
 	this->edges.clear();
 }
